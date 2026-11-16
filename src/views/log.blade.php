@@ -204,6 +204,30 @@
           Log file >50M, please download it.
         </div>
       @else
+        @if ($standardFormat && count($logs) > 0)
+          @php
+            $levelOrder = array_flip(['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug', 'failed', 'processed']);
+            $filterLevels = collect($logs)->pluck('level')->filter()->unique()
+                ->sortBy(fn ($level) => $levelOrder[$level] ?? PHP_INT_MAX)->values();
+            $filterContexts = collect($logs)->pluck('context')->filter()->unique()->sort()->values();
+          @endphp
+          <div class="form-inline d-none" id="log-filters">
+            <label class="mr-2" for="filter-level">Level</label>
+            <select id="filter-level" class="form-control form-control-sm mr-2" data-column="0">
+              <option value="">All</option>
+              @foreach ($filterLevels as $level)
+                <option value="{{ $level }}">{{ $level }}</option>
+              @endforeach
+            </select>
+            <label class="mr-2" for="filter-context">Context</label>
+            <select id="filter-context" class="form-control form-control-sm" data-column="1">
+              <option value="">All</option>
+              @foreach ($filterContexts as $context)
+                <option value="{{ $context }}">{{ $context }}</option>
+              @endforeach
+            </select>
+          </div>
+        @endif
         <table id="table-log" class="table table-striped" data-ordering-index="{{ $standardFormat ? 2 : 0 }}">
           <thead>
           <tr>
@@ -222,10 +246,10 @@
           @foreach($logs as $key => $log)
             <tr data-display="stack{{{$key}}}">
               @if ($standardFormat)
-                <td class="nowrap text-{{{$log['level_class']}}}">
+                <td class="nowrap text-{{{$log['level_class']}}}" data-search="{{ $log['level'] }}">
                   <span class="fa fa-{{{$log['level_img']}}}" aria-hidden="true"></span>&nbsp;&nbsp;{{$log['level']}}
                 </td>
-                <td class="text">{{$log['context']}}</td>
+                <td class="text" data-search="{{ $log['context'] }}">{{$log['context']}}</td>
               @endif
               <td class="date">{{{$log['date']}}}</td>
               <td class="text">
@@ -313,7 +337,7 @@
     $('.table-container tr').on('click', function () {
       $('#' + $(this).data('display')).toggle();
     });
-    $('#table-log').DataTable({
+    var table = $('#table-log').DataTable({
       "order": [$('#table-log').data('orderingIndex'), 'desc'],
       "stateSave": true,
       "stateSaveCallback": function (settings, data) {
@@ -324,6 +348,39 @@
         if (data) data.start = 0;
         return data;
       }
+    });
+
+    // Level / context filters: exact match on the column's data-search value.
+    // Shown inline in the DataTables toolbar, next to "Show N entries".
+    $('#log-filters').removeClass('d-none').addClass('d-inline-flex ml-3').appendTo($('#table-log_length')
+        .addClass('d-flex flex-wrap align-items-start'));
+    var filterRegex = function (value) {
+      return value ? '^' + $.fn.dataTable.util.escapeRegex(value) + '$' : '';
+    };
+    // Clear saved column filters that no dropdown controls (e.g. a file
+    // without level/context columns), so rows aren't silently hidden.
+    var filteredColumns = $('#log-filters select').map(function () {
+      return $(this).data('column');
+    }).get();
+    table.columns().every(function (index) {
+      if (filteredColumns.indexOf(index) === -1 && this.search()) this.search('').draw();
+    });
+    $('#log-filters select').each(function () {
+      var $select = $(this);
+      var column = table.column($select.data('column'));
+
+      // Restore a filter saved by stateSave, or drop it if this file has no
+      // such value (otherwise rows would be hidden with no visible filter).
+      var saved = column.search();
+      var match = $select.find('option').filter(function () {
+        return this.value && filterRegex(this.value) === saved;
+      });
+      if (match.length) $select.val(match.val());
+      else if (saved) column.search('').draw();
+
+      $select.on('change', function () {
+        column.search(filterRegex(this.value), true, false).draw();
+      });
     });
     $('#delete-log, #clean-log, #delete-all-log').click(function () {
       return confirm('Are you sure?');
